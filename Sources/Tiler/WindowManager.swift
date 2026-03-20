@@ -26,32 +26,34 @@ enum WindowManager {
         return (ref as! AXUIElement)
     }
 
-    // Finds which NSScreen the window's top-left corner currently sits on.
-    // Falls back to the primary screen.
+    // Returns the screen whose frame has the largest intersection with the window.
+    // Using intersection area is robust against boundary edge cases and windows
+    // that straddle two screens — unlike a simple point-containment check.
     private static func screen(for window: AXUIElement) -> NSScreen? {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &ref) == .success,
-              let val = ref else { return NSScreen.main }
+        guard let axRect = axFrame(of: window) else { return NSScreen.main }
 
-        var axOrigin = CGPoint.zero
-        AXValueGetValue(val as! AXValue, .cgPoint, &axOrigin)
+        // Convert AX rect to AppKit coordinates for comparison with NSScreen frames.
+        let mainHeight = NSScreen.main?.frame.height ?? 0
+        let appKitRect = CGRect(
+            x: axRect.minX,
+            y: mainHeight - axRect.maxY,
+            width: axRect.width,
+            height: axRect.height
+        )
 
-        // AX uses top-left origin; NSScreen uses bottom-left.
-        // Convert axOrigin to AppKit coordinates to find the right screen.
-        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        let appKitPoint  = CGPoint(x: axOrigin.x, y: screenHeight - axOrigin.y)
-
-        return NSScreen.screens.first { $0.frame.contains(appKitPoint) } ?? NSScreen.main
+        return NSScreen.screens.max {
+            intersectionArea($0.frame, appKitRect) < intersectionArea($1.frame, appKitRect)
+        } ?? NSScreen.main
     }
 
     // Returns the target AX-coordinate frame for the given half of the screen's
     // visible area (i.e. excluding menu bar and Dock).
     private static func targetFrame(_ half: Half, on screen: NSScreen) -> CGRect {
-        let visible      = screen.visibleFrame                         // AppKit (bottom-left origin)
-        let screenHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let visible    = screen.visibleFrame                // AppKit (bottom-left origin)
+        let mainHeight = NSScreen.main?.frame.height ?? screen.frame.height
 
-        // Top of the visible area in AX coordinates
-        let axY = screenHeight - visible.maxY
+        // Convert visible frame top-left from AppKit to AX coordinates.
+        let axY = mainHeight - visible.maxY
         let axX = visible.minX
         let w   = floor(visible.width / 2)
         let h   = visible.height
@@ -71,5 +73,28 @@ enum WindowManager {
         if let sizeVal = AXValueCreate(.cgSize, &size) {
             AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
         }
+    }
+
+    // MARK: - Helpers
+
+    private static func axFrame(of window: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef) == .success,
+            AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+            let pv = posRef, let sv = sizeRef
+        else { return nil }
+
+        var origin = CGPoint.zero
+        var size   = CGSize.zero
+        AXValueGetValue(pv as! AXValue, .cgPoint, &origin)
+        AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        return CGRect(origin: origin, size: size)
+    }
+
+    private static func intersectionArea(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let i = a.intersection(b)
+        return i.isNull ? 0 : i.width * i.height
     }
 }
