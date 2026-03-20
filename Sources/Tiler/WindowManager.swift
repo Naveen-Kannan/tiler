@@ -4,7 +4,6 @@ enum WindowManager {
     static func leftHalf()  { resize(.leftHalf) }
     static func rightHalf() { resize(.rightHalf) }
     static func maximize()  { resize(.maximize) }
-    static func raise()     { perform(kAXRaiseAction as CFString) }
 
     // MARK: - Private
 
@@ -19,11 +18,6 @@ enum WindowManager {
         guard let screen = screen(for: window) else { return }
         let frame = targetFrame(layout, on: screen)
         set(window: window, to: frame)
-    }
-
-    private static func perform(_ action: CFString) {
-        guard let window = frontmostWindow() else { return }
-        AXUIElementPerformAction(window, action)
     }
 
     // Returns the AXUIElement for the focused window of the frontmost app.

@@ -12,7 +12,6 @@ which handles hotkey registration and command dispatch.
 | `window.left_half` | Move focused window to left half of its screen |
 | `window.right_half` | Move focused window to right half of its screen |
 | `window.maximize` | Resize focused window to the screen's visible frame |
-| `window.raise` | Bring focused window to the front of its app/window stack |
 
 ## Integration
 
@@ -38,8 +37,6 @@ To wire up hotkeys, add bindings to `~/.config/hkd/config.json`:
 - When a hotkey fires, hkd dispatches the command string → tiler's handler runs in-process
 - `WindowManager` gets the focused window via `AXUIElementCreateApplication`, determines
   which screen it's on, converts to AX coordinates, and sets position + size
-- Raising a window is available via the Accessibility `AXRaise` action, but persistent
-  cross-app "always on top" pinning is not exposed through the public APIs used here
 
 Accessibility permission is managed by hkd (it's already required for the event tap).
 
@@ -48,7 +45,5 @@ Accessibility permission is managed by hkd (it's already required for the event 
 - [x] left half
 - [x] right half
 - [x] maximize
-- [x] raise frontmost window
 - [ ] top half / bottom half
 - [ ] center
-- [ ] persistent always-on-top pinning for arbitrary app windows

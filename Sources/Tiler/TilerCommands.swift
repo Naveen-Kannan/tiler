@@ -10,7 +10,6 @@ public struct TilerCommands {
         "window.left_half":  { WindowManager.leftHalf() },
         "window.right_half": { WindowManager.rightHalf() },
         "window.maximize":   { WindowManager.maximize() },
-        "window.raise":      { WindowManager.raise() },
     ]
 
     public init() {}
