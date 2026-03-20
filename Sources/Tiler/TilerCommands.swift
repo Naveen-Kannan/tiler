@@ -9,6 +9,8 @@ public struct TilerCommands {
     public let commands: [String: () -> Void] = [
         "window.left_half":  { WindowManager.leftHalf() },
         "window.right_half": { WindowManager.rightHalf() },
+        "window.maximize":   { WindowManager.maximize() },
+        "window.raise":      { WindowManager.raise() },
     ]
 
     public init() {}

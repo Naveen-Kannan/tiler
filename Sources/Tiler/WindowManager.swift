@@ -3,16 +3,27 @@ import AppKit
 enum WindowManager {
     static func leftHalf()  { resize(.leftHalf) }
     static func rightHalf() { resize(.rightHalf) }
+    static func maximize()  { resize(.maximize) }
+    static func raise()     { perform(kAXRaiseAction as CFString) }
 
     // MARK: - Private
 
-    private enum Half { case leftHalf, rightHalf }
+    private enum Layout {
+        case leftHalf
+        case rightHalf
+        case maximize
+    }
 
-    private static func resize(_ half: Half) {
+    private static func resize(_ layout: Layout) {
         guard let window = frontmostWindow() else { return }
-        guard let screen  = screen(for: window) else { return }
-        let frame = targetFrame(half, on: screen)
+        guard let screen = screen(for: window) else { return }
+        let frame = targetFrame(layout, on: screen)
         set(window: window, to: frame)
+    }
+
+    private static func perform(_ action: CFString) {
+        guard let window = frontmostWindow() else { return }
+        AXUIElementPerformAction(window, action)
     }
 
     // Returns the AXUIElement for the focused window of the frontmost app.
@@ -46,19 +57,23 @@ enum WindowManager {
 
     // Returns the target AX-coordinate frame for the given half of the screen's
     // visible area (i.e. excluding menu bar and Dock).
-    private static func targetFrame(_ half: Half, on screen: NSScreen) -> CGRect {
-        let visible      = screen.visibleFrame                         // AppKit (bottom-left origin)
+    private static func targetFrame(_ layout: Layout, on screen: NSScreen) -> CGRect {
+        let visible = screen.visibleFrame                              // AppKit (bottom-left origin)
         let screenHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
 
         // Top of the visible area in AX coordinates
         let axY = screenHeight - visible.maxY
         let axX = visible.minX
-        let w   = floor(visible.width / 2)
-        let h   = visible.height
 
-        switch half {
-        case .leftHalf:  return CGRect(x: axX,     y: axY, width: w, height: h)
-        case .rightHalf: return CGRect(x: axX + w, y: axY, width: w, height: h)
+        switch layout {
+        case .leftHalf:
+            let width = floor(visible.width / 2)
+            return CGRect(x: axX, y: axY, width: width, height: visible.height)
+        case .rightHalf:
+            let width = floor(visible.width / 2)
+            return CGRect(x: axX + width, y: axY, width: width, height: visible.height)
+        case .maximize:
+            return CGRect(x: axX, y: axY, width: visible.width, height: visible.height)
         }
     }
 
