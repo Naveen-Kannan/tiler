@@ -40,23 +40,16 @@ enum WindowManager {
 
         var axOrigin = CGPoint.zero
         AXValueGetValue(val as! AXValue, .cgPoint, &axOrigin)
-
-        // AX uses top-left origin; NSScreen uses bottom-left.
-        // Convert axOrigin to AppKit coordinates to find the right screen.
-        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        let appKitPoint  = CGPoint(x: axOrigin.x, y: screenHeight - axOrigin.y)
-
-        return NSScreen.screens.first { $0.frame.contains(appKitPoint) } ?? NSScreen.main
+        return NSScreen.screens.first { contains(axOrigin, in: $0) } ?? NSScreen.main
     }
 
     // Returns the target AX-coordinate frame for the given half of the screen's
     // visible area (i.e. excluding menu bar and Dock).
     private static func targetFrame(_ layout: Layout, on screen: NSScreen) -> CGRect {
         let visible = screen.visibleFrame                              // AppKit (bottom-left origin)
-        let screenHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
 
         // Top of the visible area in AX coordinates
-        let axY = screenHeight - visible.maxY
+        let axY = screen.frame.maxY - visible.maxY
         let axX = visible.minX
 
         switch layout {
@@ -80,5 +73,12 @@ enum WindowManager {
         if let sizeVal = AXValueCreate(.cgSize, &size) {
             AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
         }
+    }
+
+    private static func contains(_ axPoint: CGPoint, in screen: NSScreen) -> Bool {
+        let screenFrame = screen.frame
+        let appKitY = screenFrame.maxY - axPoint.y
+        let appKitPoint = CGPoint(x: axPoint.x, y: appKitY)
+        return screenFrame.contains(appKitPoint)
     }
 }

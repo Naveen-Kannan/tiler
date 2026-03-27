@@ -40,6 +40,22 @@ To wire up hotkeys, add bindings to `~/.config/hkd/config.json`:
 
 Accessibility permission is managed by hkd (it's already required for the event tap).
 
+## Floating Window Note
+
+We investigated adding a "pin window on top" feature to `tiler`, but did not keep it.
+
+Why it does not fit the current architecture:
+- `tiler` runs as a normal external process using Accessibility (`AXUIElement`) against other apps' windows.
+- From that position, we can resize, move, and raise a foreign window, but we do not control its real window level.
+- A polling loop that repeatedly calls `kAXRaiseAction` is only a best-effort re-raise. It cannot provide true always-on-top behavior while you continue interacting normally with other apps.
+- More aggressive versions of this idea typically steal focus or fight app activation, which is not a clean fit for this project.
+
+What would be required for a future extension:
+- A separate experimental helper based on injection/private window APIs, similar in spirit to AfloatX. This can provide real floating behavior, but is less stable and carries higher maintenance risk.
+- Or a separate overlay-style helper that owns its own floating window instead of trying to promote another app's real window.
+
+For now, `tiler` stays focused on lightweight, explicit window movement and sizing.
+
 ## Status
 
 - [x] left half
