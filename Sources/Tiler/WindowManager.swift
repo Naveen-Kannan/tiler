@@ -4,6 +4,10 @@ enum WindowManager {
     static func leftHalf()  { resize(.leftHalf) }
     static func rightHalf() { resize(.rightHalf) }
     static func maximize()  { resize(.maximize) }
+    static func topLeft()   { resize(.topLeft) }
+    static func topRight()  { resize(.topRight) }
+    static func bottomLeft() { resize(.bottomLeft) }
+    static func bottomRight() { resize(.bottomRight) }
 
     // MARK: - Private
 
@@ -11,6 +15,10 @@ enum WindowManager {
         case leftHalf
         case rightHalf
         case maximize
+        case topLeft
+        case topRight
+        case bottomLeft
+        case bottomRight
     }
 
     private static func resize(_ layout: Layout) {
@@ -47,20 +55,68 @@ enum WindowManager {
     // visible area (i.e. excluding menu bar and Dock).
     private static func targetFrame(_ layout: Layout, on screen: NSScreen) -> CGRect {
         let visible = screen.visibleFrame                              // AppKit (bottom-left origin)
-
-        // Top of the visible area in AX coordinates
-        let axY = screen.frame.maxY - visible.maxY
-        let axX = visible.minX
+        let leftWidth = floor(visible.width / 2)
+        let rightWidth = visible.width - leftWidth
+        let topHeight = floor(visible.height / 2)
+        let bottomHeight = visible.height - topHeight
 
         switch layout {
         case .leftHalf:
-            let width = floor(visible.width / 2)
-            return CGRect(x: axX, y: axY, width: width, height: visible.height)
+            return axFrame(
+                x: visible.minX,
+                appKitMinY: visible.minY,
+                width: leftWidth,
+                height: visible.height,
+                on: screen
+            )
         case .rightHalf:
-            let width = floor(visible.width / 2)
-            return CGRect(x: axX + width, y: axY, width: width, height: visible.height)
+            return axFrame(
+                x: visible.minX + leftWidth,
+                appKitMinY: visible.minY,
+                width: rightWidth,
+                height: visible.height,
+                on: screen
+            )
         case .maximize:
-            return CGRect(x: axX, y: axY, width: visible.width, height: visible.height)
+            return axFrame(
+                x: visible.minX,
+                appKitMinY: visible.minY,
+                width: visible.width,
+                height: visible.height,
+                on: screen
+            )
+        case .topLeft:
+            return axFrame(
+                x: visible.minX,
+                appKitMinY: visible.maxY - topHeight,
+                width: leftWidth,
+                height: topHeight,
+                on: screen
+            )
+        case .topRight:
+            return axFrame(
+                x: visible.minX + leftWidth,
+                appKitMinY: visible.maxY - topHeight,
+                width: rightWidth,
+                height: topHeight,
+                on: screen
+            )
+        case .bottomLeft:
+            return axFrame(
+                x: visible.minX,
+                appKitMinY: visible.minY,
+                width: leftWidth,
+                height: bottomHeight,
+                on: screen
+            )
+        case .bottomRight:
+            return axFrame(
+                x: visible.minX + leftWidth,
+                appKitMinY: visible.minY,
+                width: rightWidth,
+                height: bottomHeight,
+                on: screen
+            )
         }
     }
 
@@ -80,5 +136,16 @@ enum WindowManager {
         let appKitY = screenFrame.maxY - axPoint.y
         let appKitPoint = CGPoint(x: axPoint.x, y: appKitY)
         return screenFrame.contains(appKitPoint)
+    }
+
+    private static func axFrame(
+        x: CGFloat,
+        appKitMinY: CGFloat,
+        width: CGFloat,
+        height: CGFloat,
+        on screen: NSScreen
+    ) -> CGRect {
+        let axY = screen.frame.maxY - (appKitMinY + height)
+        return CGRect(x: x, y: axY, width: width, height: height)
     }
 }

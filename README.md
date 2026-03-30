@@ -12,6 +12,10 @@ which handles hotkey registration and command dispatch.
 | `window.left_half` | Move focused window to left half of its screen |
 | `window.right_half` | Move focused window to right half of its screen |
 | `window.maximize` | Resize focused window to the screen's visible frame |
+| `window.top_left` | Move focused window to the top-left quarter |
+| `window.top_right` | Move focused window to the top-right quarter |
+| `window.bottom_left` | Move focused window to the bottom-left quarter |
+| `window.bottom_right` | Move focused window to the bottom-right quarter |
 
 ## Integration
 
@@ -25,7 +29,11 @@ To wire up hotkeys, add bindings to `~/.config/hkd/config.json`:
   "bindings": [
     { "trigger": "cmd+opt+left",  "on_press": "window.left_half" },
     { "trigger": "cmd+opt+right", "on_press": "window.right_half" },
-    { "trigger": "cmd+opt+up",    "on_press": "window.maximize" }
+    { "trigger": "cmd+opt+up",    "on_press": "window.maximize" },
+    { "trigger": "cmd+opt+1",     "on_press": "window.top_left" },
+    { "trigger": "cmd+opt+2",     "on_press": "window.top_right" },
+    { "trigger": "cmd+opt+3",     "on_press": "window.bottom_left" },
+    { "trigger": "cmd+opt+4",     "on_press": "window.bottom_right" }
   ]
 }
 ```
@@ -61,5 +69,9 @@ For now, `tiler` stays focused on lightweight, explicit window movement and sizi
 - [x] left half
 - [x] right half
 - [x] maximize
+- [x] top left
+- [x] top right
+- [x] bottom left
+- [x] bottom right
 - [ ] top half / bottom half
 - [ ] center
