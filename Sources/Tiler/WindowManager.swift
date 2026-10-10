@@ -1,151 +1,153 @@
 import AppKit
+import os
 
+// AppKit display snapshots stay on the caller's main thread; AX work is serialized off it.
 enum WindowManager {
+    private static let log = Logger(subsystem: "com.nkannan.tiler", category: "placement")
+    private static let queue = DispatchQueue(label: "com.nkannan.tiler", qos: .userInitiated)
+
+    private struct Context {
+        let pid: pid_t
+        let screens: [CGRect]
+        let visible: [CGRect]
+        let pointerIndex: Int?
+    }
+
     static func leftHalf()  { resize(.leftHalf) }
     static func rightHalf() { resize(.rightHalf) }
+    static func topHalf()  { resize(.topHalf) }
+    static func bottomHalf() { resize(.bottomHalf) }
     static func maximize()  { resize(.maximize) }
     static func topLeft()   { resize(.topLeft) }
     static func topRight()  { resize(.topRight) }
     static func bottomLeft() { resize(.bottomLeft) }
     static func bottomRight() { resize(.bottomRight) }
+    static func nextDisplay() { moveDisplay(step: 1) }
+    static func previousDisplay() { moveDisplay(step: -1) }
+    static func display(_ number: Int) { moveDisplay(number: number) }
+    static func pointerDisplay() { moveDisplay(toPointer: true) }
 
-    // MARK: - Private
-
-    private enum Layout {
-        case leftHalf
-        case rightHalf
-        case maximize
-        case topLeft
-        case topRight
-        case bottomLeft
-        case bottomRight
+    private static func perform(_ action: @escaping (Context) -> Void) {
+        let screens = NSScreen.screens
+        guard let primary = screens.first, let app = NSWorkspace.shared.frontmostApplication else { return }
+        let context = Context(
+            pid: app.processIdentifier,
+            screens: screens.map { DisplayGeometry.axFrame($0.frame, primaryHeight: primary.frame.height) },
+            visible: screens.map { DisplayGeometry.axFrame($0.visibleFrame, primaryHeight: primary.frame.height) },
+            pointerIndex: screens.firstIndex { $0.frame.contains(NSEvent.mouseLocation) }
+        )
+        queue.async { action(context) }
     }
 
-    private static func resize(_ layout: Layout) {
-        guard let window = frontmostWindow() else { return }
-        guard let screen = screen(for: window) else { return }
-        let frame = targetFrame(layout, on: screen)
-        set(window: window, to: frame)
+    private static func resize(_ layout: DisplayGeometry.Layout) {
+        perform { context in
+            guard let window = frontmostWindow(pid: context.pid), let frame = windowFrame(window),
+                  let index = DisplayGeometry.screenIndex(for: frame, screens: context.screens) else { return }
+            let visible = context.visible[index]
+            set(window: window, to: DisplayGeometry.targetFrame(layout, visible: visible), within: visible)
+        }
     }
 
-    // Returns the AXUIElement for the focused window of the frontmost app.
-    private static func frontmostWindow() -> AXUIElement? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+    private static func moveDisplay(step: Int = 0, number: Int? = nil, toPointer: Bool = false) {
+        perform { context in
+            guard let window = frontmostWindow(pid: context.pid), let frame = windowFrame(window),
+                  let source = DisplayGeometry.screenIndex(for: frame, screens: context.screens) else { return }
+            let order = DisplayGeometry.orderedIndices(context.screens)
+            let target: Int
+            if toPointer {
+                guard let index = context.pointerIndex else { return }
+                target = index
+            } else if let number {
+                guard number > 0, number <= order.count else { return }
+                target = order[number - 1]
+            } else {
+                guard let index = order.firstIndex(of: source) else { return }
+                target = order[(index + step + order.count) % order.count]
+            }
+            let visible = context.visible[target]
+            set(window: window, to: visible, within: visible)
+        }
+    }
+
+    private static func frontmostWindow(pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.6)
         var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success else {
-            return nil
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &ref) == .success,
+              let ref, CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+        let window = ref as! AXUIElement
+        AXUIElementSetMessagingTimeout(window, 0.6)
+        var fullScreen: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreen)
+        guard (fullScreen as? Bool) != true else { return nil }
+        return window
+    }
+
+    private static func windowFrame(_ window: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef,
+              CFGetTypeID(positionRef) == AXValueGetTypeID(),
+              CFGetTypeID(sizeRef) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+              size.width > 0, size.height > 0 else { return nil }
+        return CGRect(origin: origin, size: size)
+    }
+
+    private static func set(window: AXUIElement, to frame: CGRect, within bounds: CGRect) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success else { return }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 2)
+        let enhancedAttribute = "AXEnhancedUserInterface" as CFString
+        var enhanced: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, enhancedAttribute, &enhanced)
+        let wasEnhanced = (enhanced as? Bool) == true
+        let suppression = wasEnhanced
+            ? AXUIElementSetAttributeValue(app, enhancedAttribute, kCFBooleanFalse) : .success
+        defer {
+            // Some apps apply this write even while reporting NotImplemented.
+            if wasEnhanced {
+                AXUIElementSetAttributeValue(app, enhancedAttribute, kCFBooleanTrue)
+                var restored: CFTypeRef?
+                let result = AXUIElementCopyAttributeValue(app, enhancedAttribute, &restored)
+                if result != .success || (restored as? Bool) != true {
+                    log.error("enhanced UI mode was not restored")
+                }
+            }
         }
-        return (ref as! AXUIElement)
-    }
 
-    // Finds which NSScreen the window's top-left corner currently sits on.
-    // Falls back to the primary screen.
-    private static func screen(for window: AXUIElement) -> NSScreen? {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &ref) == .success,
-              let val = ref else { return NSScreen.main }
-
-        var axOrigin = CGPoint.zero
-        AXValueGetValue(val as! AXValue, .cgPoint, &axOrigin)
-        return NSScreen.screens.first { contains(axOrigin, in: $0) } ?? NSScreen.main
-    }
-
-    // Returns the target AX-coordinate frame for the given half of the screen's
-    // visible area (i.e. excluding menu bar and Dock).
-    private static func targetFrame(_ layout: Layout, on screen: NSScreen) -> CGRect {
-        let visible = screen.visibleFrame                              // AppKit (bottom-left origin)
-        let leftWidth = floor(visible.width / 2)
-        let rightWidth = visible.width - leftWidth
-        let topHeight = floor(visible.height / 2)
-        let bottomHeight = visible.height - topHeight
-
-        switch layout {
-        case .leftHalf:
-            return axFrame(
-                x: visible.minX,
-                appKitMinY: visible.minY,
-                width: leftWidth,
-                height: visible.height,
-                on: screen
-            )
-        case .rightHalf:
-            return axFrame(
-                x: visible.minX + leftWidth,
-                appKitMinY: visible.minY,
-                width: rightWidth,
-                height: visible.height,
-                on: screen
-            )
-        case .maximize:
-            return axFrame(
-                x: visible.minX,
-                appKitMinY: visible.minY,
-                width: visible.width,
-                height: visible.height,
-                on: screen
-            )
-        case .topLeft:
-            return axFrame(
-                x: visible.minX,
-                appKitMinY: visible.maxY - topHeight,
-                width: leftWidth,
-                height: topHeight,
-                on: screen
-            )
-        case .topRight:
-            return axFrame(
-                x: visible.minX + leftWidth,
-                appKitMinY: visible.maxY - topHeight,
-                width: rightWidth,
-                height: topHeight,
-                on: screen
-            )
-        case .bottomLeft:
-            return axFrame(
-                x: visible.minX,
-                appKitMinY: visible.minY,
-                width: leftWidth,
-                height: bottomHeight,
-                on: screen
-            )
-        case .bottomRight:
-            return axFrame(
-                x: visible.minX + leftWidth,
-                appKitMinY: visible.minY,
-                width: rightWidth,
-                height: bottomHeight,
-                on: screen
-            )
+        var origin = frame.origin, size = frame.size
+        guard let position = AXValueCreate(.cgPoint, &origin),
+              let dimensions = AXValueCreate(.cgSize, &size) else { return }
+        // The source display can constrain size until the app processes the move.
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, dimensions)
+        var attempts = 0
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.25
+        for attempt in 0..<8 {
+            attempts += 1
+            let positionResult = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position)
+            let sizeResult = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, dimensions)
+            if positionResult != .success || sizeResult != .success {
+                log.error("placement failed: position=\(positionResult.rawValue), size=\(sizeResult.rawValue)")
+                break
+            }
+            guard let actual = windowFrame(window) else { break }
+            if DisplayGeometry.matches(actual, frame) { break }
+            origin = DisplayGeometry.fitted(CGRect(origin: frame.origin, size: actual.size), in: bounds).origin
+            if actual.origin != origin, let aligned = AXValueCreate(.cgPoint, &origin) {
+                AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, aligned)
+            }
+            // Some apps update screen constraints on their next event-loop turn.
+            // Keep corrections in this command, off the keyboard callback.
+            guard attempt < 7, ProcessInfo.processInfo.systemUptime < deadline else { break }
+            Thread.sleep(forTimeInterval: 0.03)
         }
-    }
-
-    private static func set(window: AXUIElement, to frame: CGRect) {
-        var origin = frame.origin
-        var size   = frame.size
-        if let posVal  = AXValueCreate(.cgPoint, &origin) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
+        if let actual = windowFrame(window) {
+            log.notice("placed pid=\(pid) enhancedUI=\(wasEnhanced) suppression=\(suppression.rawValue) attempts=\(attempts) target=\(String(describing: frame), privacy: .public) actual=\(String(describing: actual), privacy: .public)")
         }
-        if let sizeVal = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
-        }
-    }
-
-    private static func contains(_ axPoint: CGPoint, in screen: NSScreen) -> Bool {
-        let screenFrame = screen.frame
-        let appKitY = screenFrame.maxY - axPoint.y
-        let appKitPoint = CGPoint(x: axPoint.x, y: appKitY)
-        return screenFrame.contains(appKitPoint)
-    }
-
-    private static func axFrame(
-        x: CGFloat,
-        appKitMinY: CGFloat,
-        width: CGFloat,
-        height: CGFloat,
-        on screen: NSScreen
-    ) -> CGRect {
-        let axY = screen.frame.maxY - (appKitMinY + height)
-        return CGRect(x: x, y: axY, width: width, height: height)
     }
 }
