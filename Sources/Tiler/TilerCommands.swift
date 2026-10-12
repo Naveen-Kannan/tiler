@@ -3,10 +3,10 @@
 // Registers window management commands with the hotkey daemon.
 // hkd maps hotkeys → command strings; this provides the handlers.
 
-public struct TilerCommands {
+public struct TilerCommands: Sendable {
     public let name = "tiler"
 
-    public let commands: [String: () -> Void] = [
+    private let handlers: [String: @Sendable () -> Void] = [
         "window.left_half":  { WindowManager.leftHalf() },
         "window.right_half": { WindowManager.rightHalf() },
         "window.top_half":   { WindowManager.topHalf() },
@@ -23,6 +23,11 @@ public struct TilerCommands {
         "window.display_3": { WindowManager.display(3) },
         "window.pointer_display": { WindowManager.pointerDisplay() },
     ]
+
+    // Preserve the host's ordinary closure signature without a runtime dictionary cast.
+    public var commands: [String: () -> Void] {
+        handlers.mapValues { handler in { handler() } }
+    }
 
     public init() {}
 }

@@ -29,7 +29,7 @@ enum DisplayGeometry {
         }
     }
 
-    enum Layout {
+    enum Layout: Sendable {
         case leftHalf, rightHalf, topHalf, bottomHalf, maximize, topLeft, topRight, bottomLeft, bottomRight
     }
 

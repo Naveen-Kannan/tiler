@@ -1,134 +1,120 @@
-# tiler
+# Tiler
 
-Rectangle-style window management for [hkd](https://github.com/Naveen-Kannan/hotkey).
+[![Tests](https://github.com/Naveen-Kannan/tiler/actions/workflows/tests.yml/badge.svg)](https://github.com/Naveen-Kannan/tiler/actions/workflows/tests.yml)
 
-Tiler is a Swift Package library — it has no process of its own. It plugs into hkd,
-which handles hotkey registration and command dispatch.
+Window tiling for macOS, as a small Swift library. Move the focused window into
+halves or quarters, maximize it, or send it to another display.
+
+I wanted Rectangle-style controls as explicit hotkey commands inside my existing
+hotkey host. Tiler runs in that host's process and exports a command dictionary.
+
+## Build and test
+
+- macOS 13 or newer.
+- Swift 6 or newer to build and test. The tests use Swift Testing.
+
+```sh
+git clone https://github.com/Naveen-Kannan/tiler.git
+cd tiler
+swift build
+swift test
+```
+
+The package has no external dependencies. CI runs the test suite on a standard
+GitHub macOS runner after the repository is public.
+
+## Use from a Swift host
+
+Add Tiler as a Swift Package dependency:
+
+```swift
+.package(url: "https://github.com/Naveen-Kannan/tiler.git", branch: "main")
+```
+
+Add its library product to your host target's dependencies:
+
+```swift
+.product(name: "Tiler", package: "tiler")
+```
+
+Then connect a handler to your keyboard shortcut or command router:
+
+```swift
+import Tiler
+
+@MainActor
+func snapFocusedWindowLeft() {
+    TilerCommands().commands["window.left_half"]?()
+}
+```
+
+Handlers can be called from any thread. The command collection is `Sendable`;
+Tiler snapshots the displays and active app on the main queue, then performs
+Accessibility operations on a serial background queue. The host needs a running
+main event loop, as a normal macOS application provides.
+The host application needs macOS Accessibility permission to move other apps'
+windows. My own host supplies shortcut registration, command dispatch, and that
+permission; other hosts can use the same dictionary.
 
 ## Commands
 
 | Command | Action |
 |---|---|
-| `window.left_half` | Move focused window to left half of its screen |
-| `window.right_half` | Move focused window to right half of its screen |
-| `window.top_half` | Move focused window to top half of its screen |
-| `window.bottom_half` | Move focused window to bottom half of its screen |
-| `window.maximize` | Resize focused window to the screen's visible frame |
-| `window.top_left` | Move focused window to the top-left quarter |
-| `window.top_right` | Move focused window to the top-right quarter |
-| `window.bottom_left` | Move focused window to the bottom-left quarter |
-| `window.bottom_right` | Move focused window to the bottom-right quarter |
-| `window.next_display` | Send focused window to the next monitor, wrapping around |
-| `window.previous_display` | Send focused window to the previous monitor, wrapping around |
-| `window.display_1` / `window.display_2` / `window.display_3` | Send focused window directly to monitor 1 / 2 / 3 |
-| `window.pointer_display` | Bring focused window to the monitor under the pointer |
+| `window.left_half` / `window.right_half` | Left / right half of the current display |
+| `window.top_half` / `window.bottom_half` | Top / bottom half |
+| `window.maximize` | Fill the display's visible frame |
+| `window.top_left` / `window.top_right` | Top-left / top-right quarter |
+| `window.bottom_left` / `window.bottom_right` | Bottom-left / bottom-right quarter |
+| `window.next_display` / `window.previous_display` | Move between displays, wrapping around |
+| `window.display_1` / `window.display_2` / `window.display_3` | Move directly to a numbered display |
+| `window.pointer_display` | Move to the display under the pointer |
 
-## Multiple monitors
+## Displays and placement
 
-The aim is to move a working window between displays without interrupting dictation,
-app launchers, music controls, or the existing tiling shortcuts.
+Display numbers follow the arrangement in macOS: left to right, then top to
+bottom when displays share an X coordinate. The list is read for each command,
+so rearranging or reconnecting displays can change the numbers.
 
-| Shortcut | Action |
-|---|---|
-| Command+Option+Up / Down | Top / bottom half |
-| Command+Option+Shift+Up | Maximize |
-| Command+Option+Shift+Down | Next monitor (with two monitors, swaps between them) |
-| Command+Option+5 / 6 / 7 | Monitor 1 / 2 / 3 |
-| Command+Option+0 | Monitor under the mouse pointer |
+Moving to a display maximizes the window within its visible frame, excluding the
+Dock and menu bar. Choose a half or quarter afterward for a smaller layout. A
+window spanning displays belongs to the one with the largest overlap. Coordinates
+use the primary display's top-left as their origin, including displays above or
+below it.
 
-Monitor numbers follow the arrangement in macOS Displays: left to right, then top to
-bottom for displays at the same horizontal position. Connecting or rearranging displays
-can change these numbers. Screens are read on every command; no restart is needed.
-Monitor moves maximize the focused window on the destination, including selection of
-its current monitor. Use Command+Option+Left/Right afterward to choose a half. Maximize
-fills the visible area while retaining a normal window; it does not create a fullscreen
-Space. The destination excludes the Dock and menu bar. Windows spanning screens belong
-to the display with the largest overlap. All coordinates use the primary display's origin,
-including vertically offset displays.
+Select the app and window before invoking a command. Native fullscreen windows
+and unavailable display numbers are skipped. With one display, a display move
+maximizes on that display. App minimum sizes, macOS Spaces, and application
+Accessibility support can limit the result.
 
-A serial background queue performs Accessibility operations, so a slow target app cannot
-block HK's keyboard callback. Placement temporarily disables `AXEnhancedUserInterface` when it was enabled, then
-applies size, position, size, and final alignment in one operation. The original mode is
-restored afterward and checked by reading it back. Some apps report `NotImplemented`
-even though the write changes the value, so setter status alone cannot decide restoration.
-The final bounds are checked, with up to eight position/size attempts if the
-source display's constraints persist. Only mismatched bounds wait 30 ms between attempts
-(on the worker queue) so the app can update its screen limits. Retries stop after 250 ms
-or a setter failure, so a slow app does not cause an extended retry loop. No later timer replays an old command. See Rectangle's
+Commands retain the app and display context selected when queued. With a slow
+target app, repeated commands can finish after focus has moved elsewhere.
+
+## Implementation
+
+- `TilerCommands` exposes the command names and handlers.
+- `DisplayGeometry` handles coordinate conversion, display selection, and layouts.
+- `WindowManager` reads the focused window through `AXUIElement` and applies its
+  size and position off the keyboard callback.
+
+Placement applies size, position, then size again, with bounded corrections if
+an app retains constraints from the source display. Further attempts stop after
+eight attempts, a setter failure, or the 250 ms retry budget. This budget limits
+additional retries, rather than the total command duration: individual
+Accessibility calls can take longer, up to their messaging timeouts. Corrections
+stay within the original command rather than scheduling a later window move.
+
+When needed, placement temporarily disables `AXEnhancedUserInterface`, then
+restores and verifies its previous enabled state. This accommodates apps that
+apply a change while reporting `NotImplemented`. Rectangle's
 [AccessibilityElement implementation](https://github.com/rxhanson/Rectangle/blob/main/Rectangle/AccessibilityElement.swift)
-for the macOS behavior motivating this sequence.
+provides background on this macOS behavior.
 
-Select the app/window first, then use a monitor shortcut. Only the focused window moves.
-An absent monitor number or a native fullscreen window causes monitor commands to do
-nothing. With one display, a monitor command maximizes on that display. macOS Spaces and app-enforced minimum sizes can limit placement.
-The optional `window.previous_display` command is available through HK without an
-additional default binding. Existing Command+Option+1–4 quarter bindings are preserved.
+CI uses Swift 6 strict concurrency mode. Tests cover the command collection's task
+and host compatibility, offset displays, overlap and fallback selection, spatial
+display order, halves and quarters with odd dimensions, app minimum sizes, and
+portrait monitor transfers. Window movement also depends on the target
+application's Accessibility behavior.
 
-## Integration
+## License
 
-tiler is imported by hkd as a SwiftPM dependency. See the
-[hotkey](https://github.com/Naveen-Kannan/hotkey) repo for build and install instructions.
-
-To wire up hotkeys, add bindings to `~/.config/hkd/config.json`:
-
-```json
-{
-  "bindings": [
-    { "trigger": "cmd+opt+left",  "on_press": "window.left_half" },
-    { "trigger": "cmd+opt+right", "on_press": "window.right_half" },
-    { "trigger": "cmd+opt+up",    "on_press": "window.top_half" },
-    { "trigger": "cmd+opt+down",  "on_press": "window.bottom_half" },
-    { "trigger": "cmd+opt+shift+up", "on_press": "window.maximize" },
-    { "trigger": "cmd+opt+1",     "on_press": "window.top_right" },
-    { "trigger": "cmd+opt+2",     "on_press": "window.top_left" },
-    { "trigger": "cmd+opt+3",     "on_press": "window.bottom_left" },
-    { "trigger": "cmd+opt+4",     "on_press": "window.bottom_right" },
-    { "trigger": "cmd+opt+shift+down", "on_press": "window.next_display" },
-    { "trigger": "cmd+opt+5",     "on_press": "window.display_1" },
-    { "trigger": "cmd+opt+6",     "on_press": "window.display_2" },
-    { "trigger": "cmd+opt+7",     "on_press": "window.display_3" },
-    { "trigger": "cmd+opt+0",     "on_press": "window.pointer_display" }
-  ]
-}
-```
-
-## How it works
-
-- `TilerCommands` exports a name and a `[String: () -> Void]` command map
-- hkd registers each entry with its `CommandRouter` at startup
-- When a hotkey fires, hkd dispatches the command string → tiler's handler runs in-process
-- `WindowManager` gets the focused window via `AXUIElementCreateApplication`, determines
-  which screen it's on, converts to AX coordinates, and sets position + size
-
-Accessibility permission is managed by hkd (it's already required for the event tap).
-
-## Floating Window Note
-
-We investigated adding a "pin window on top" feature to `tiler`, but did not keep it.
-
-Why it does not fit the current architecture:
-- `tiler` runs as a normal external process using Accessibility (`AXUIElement`) against other apps' windows.
-- From that position, we can resize, move, and raise a foreign window, but we do not control its real window level.
-- A polling loop that repeatedly calls `kAXRaiseAction` is only a best-effort re-raise. It cannot provide true always-on-top behavior while you continue interacting normally with other apps.
-- More aggressive versions of this idea typically steal focus or fight app activation, which is not a clean fit for this project.
-
-What would be required for a future extension:
-- A separate experimental helper based on injection/private window APIs, similar in spirit to AfloatX. This can provide real floating behavior, but is less stable and carries higher maintenance risk.
-- Or a separate overlay-style helper that owns its own floating window instead of trying to promote another app's real window.
-
-For now, `tiler` stays focused on lightweight, explicit window movement and sizing.
-
-## Status
-
-- [x] left half
-- [x] right half
-- [x] maximize
-- [x] top left
-- [x] top right
-- [x] bottom left
-- [x] bottom right
-- [x] next / previous monitor
-- [x] direct monitor selection
-- [x] move to pointer monitor
-- [x] top half / bottom half
-- [ ] center
+[MIT](LICENSE). Copyright © 2026 Naveen Kannan.

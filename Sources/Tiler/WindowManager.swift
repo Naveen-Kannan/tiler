@@ -1,12 +1,12 @@
 import AppKit
 import os
 
-// AppKit display snapshots stay on the caller's main thread; AX work is serialized off it.
+// AppKit snapshots run on the main queue; AX work is serialized off it.
 enum WindowManager {
     private static let log = Logger(subsystem: "com.nkannan.tiler", category: "placement")
     private static let queue = DispatchQueue(label: "com.nkannan.tiler", qos: .userInitiated)
 
-    private struct Context {
+    private struct Context: Sendable {
         let pid: pid_t
         let screens: [CGRect]
         let visible: [CGRect]
@@ -27,7 +27,16 @@ enum WindowManager {
     static func display(_ number: Int) { moveDisplay(number: number) }
     static func pointerDisplay() { moveDisplay(toPointer: true) }
 
-    private static func perform(_ action: @escaping (Context) -> Void) {
+    private static func perform(_ action: @escaping @Sendable (Context) -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { enqueue(action) }
+        } else {
+            DispatchQueue.main.async { enqueue(action) }
+        }
+    }
+
+    @MainActor
+    private static func enqueue(_ action: @escaping @Sendable (Context) -> Void) {
         let screens = NSScreen.screens
         guard let primary = screens.first, let app = NSWorkspace.shared.frontmostApplication else { return }
         let context = Context(
